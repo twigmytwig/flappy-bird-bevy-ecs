@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::animation::SpriteAnimation;
 use crate::movement::Velocity;
 use crate::pipe::{Pipe, ScoredAlready, TopPipe};
 use crate::scoring::PointScored;
@@ -10,27 +11,58 @@ pub struct BirdPlugin;
 // Pixels per second, and pixels per second per second.
 const FLAP_STRENGTH: f32 = 350.0;
 const GRAVITY: f32 = 1000.0;
+// 2x the 16px art. Whole-number scales keep pixel art evenly sized.
+const BIRD_SIZE: f32 = 32.0;
+// Frame shown between flaps. Try 0-3 and pick the best gliding pose.
+const BIRD_IDLE_FRAME: usize = 0;
 
 #[derive(Component)]
 pub struct Bird;
 
+/// Sent every time the bird flaps. Anything that reacts to a flap
+/// (animation now, a sound later) reads this instead of checking input.
+#[derive(Message)]
+pub struct Flapped;
+
 impl Plugin for BirdPlugin{
     fn build(&self, app: &mut App){
+        app.add_message::<Flapped>();
         app.add_systems(OnEnter(GameState::PreGame), spawn_bird);
         app.add_systems(Update, (apply_gravity, check_collision, check_pipe_passed).run_if(in_state(GameState::Playing)));
         // Flap also runs in PreGame so the Space press that starts the round
         // gives the first jump. The state only changes at the end of the frame,
         // so a Playing-only flap would miss that press.
-        app.add_systems(Update, flap.run_if(in_state(GameState::PreGame).or_else(in_state(GameState::Playing))));
+        // chain() runs start_flap_animation after flap, so the animation
+        // starts the same frame instead of one frame late.
+        app.add_systems(
+            Update,
+            (flap, start_flap_animation)
+                .chain()
+                .run_if(in_state(GameState::PreGame).or_else(in_state(GameState::Playing))),
+        );
     }
 }
 
-fn spawn_bird(mut commands: Commands){
+fn spawn_bird(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut layouts: ResMut<Assets<TextureAtlasLayout>>,
+){
+    let image = asset_server.load("Flappy Bird Assets/Player/StyleBird1/Bird1-1.png");
+    // The image is a strip of 4 frames, each 16x16: 4 columns, 1 row.
+    let layout = layouts.add(TextureAtlasLayout::from_grid(UVec2::splat(16), 4, 1, None, None));
+
     commands.spawn((
         Bird,
         Velocity(Vec2::ZERO),
         Transform::from_xyz(-100.0, 0.0, 0.0),
-        Sprite::from_color(Color::srgb(1.0, 0.8, 0.0), Vec2::new(30.0, 30.0)),
+        Sprite {
+            // Without custom_size, check_collision's let-else skips everything.
+            custom_size: Some(Vec2::splat(BIRD_SIZE)),
+            ..Sprite::from_atlas_image(image, TextureAtlas { layout, index: BIRD_IDLE_FRAME })
+        },
+        // Frames 0 to 3, 0.06s each, resting on the idle frame.
+        SpriteAnimation::new(0, 3, BIRD_IDLE_FRAME, 0.06),
         // Spawned in PreGame but tagged Playing: survives PreGame -> Playing,
         // removed on Playing -> GameOver.
         DespawnOnExit(GameState::Playing),
@@ -38,10 +70,28 @@ fn spawn_bird(mut commands: Commands){
 }
 
 // Sets the speed, doesn't move the bird. apply_velocity does the moving.
-fn flap(keys: Res<ButtonInput<KeyCode>>, mut query: Query<&mut Velocity, With<Bird>>){
+fn flap(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut query: Query<&mut Velocity, With<Bird>>,
+    mut flapped: MessageWriter<Flapped>,
+){
     if keys.just_pressed(KeyCode::Space){
         for mut velocity in &mut query{
             velocity.0.y = FLAP_STRENGTH;
+            flapped.write(Flapped);
+        }
+    }
+}
+
+fn start_flap_animation(
+    mut flapped: MessageReader<Flapped>,
+    mut query: Query<&mut SpriteAnimation, With<Bird>>,
+){
+    // count() reads (and so uses up) every message. Several flaps in one
+    // frame should still restart the animation only once.
+    if flapped.read().count() > 0 {
+        for mut animation in &mut query {
+            animation.play();
         }
     }
 }

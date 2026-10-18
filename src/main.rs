@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+mod animation;
 mod bird;
 mod pipe;
 mod movement;
@@ -8,11 +9,13 @@ mod state;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins)
+        // Nearest-neighbor scaling keeps pixel art sharp instead of blurry.
+        .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .add_plugins(state::StatePlugin)
         .add_plugins(bird::BirdPlugin)
         .add_plugins(pipe::PipePlugin)
         .add_plugins(movement::MovementPlugin)
+        .add_plugins(animation::AnimationPlugin)
         .add_plugins(scoring::ScoringPlugin)
         .add_systems(Startup, spawn_camera)
         .run();
