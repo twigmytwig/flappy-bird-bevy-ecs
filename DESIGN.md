@@ -1,129 +1,149 @@
 # Flappy Bird: Design
 
-Bevy 0.20. Build the `Playing` state first, then menus/pause.
+How the game is put together and why. Written for Bevy 0.20.
 
-## Game states
-
-```
-┌───────────┐  press start  ┌───────────┐   press P    ┌───────────┐
-│ MainMenu  │──────────────▶│  Playing  │◀────────────▶│  Paused   │
-└───────────┘               └─────┬─────┘              └───────────┘
-      ▲                           │ bird hits pipe/ground
-      │                           ▼
-      │    press restart    ┌───────────┐
-      └─────────────────────│ GameOver  │
-                            └───────────┘
-   (leaving Playing despawns all game entities automatically)
-```
+This file describes **purpose, rules and structure**. For exact details (which
+systems exist, which set a system is in), the code is the source of truth:
+search for the name.
 
 ## ECS refresher
 
 - **Entity**: a thing that exists. Just an ID.
 - **Component**: data attached to an entity.
 - **Resource**: global data, only one copy.
-- **System**: a function that runs every frame and queries components/resources.
-- **Plugin**: a way to group related systems in one place (organization only).
+- **Message**: a one-off "this happened" note one system sends and others read.
+- **System**: a function Bevy runs (every frame, or on a state change) that reads/writes the above.
+- **Plugin**: groups related systems and setup in one place (organization only).
 
-## Entities and components
+## Game states
 
 ```
-Bird ─────────── Bird · Transform · Sprite · Velocity
-Bottom pipe ──── Pipe · Transform · Sprite · Velocity · ScoreZone
-Top pipe ─────── Pipe · Transform · Sprite · Velocity
-Score text ───── ScoreText · Text
+            ┌──────────┐   Space    ┌──────────┐
+  start ───▶│ PreGame  │───────────▶│ Playing  │
+            └──────────┘            └────┬─────┘
+                 ▲                       │ hit pipe / screen edge
+                 │         R        ┌────▼─────┐
+                 └──────────────────│ GameOver │
+                                    └──────────┘
+```
+
+| State | What happens |
+|---|---|
+| `PreGame` | Bird and score text spawn. Bird floats (no gravity). "Press Space to start". |
+| `Playing` | Gravity, movement, pipes, collision and scoring all run. |
+| `GameOver` | High score updated and saved, game over screen shown. Waits for R. |
+
+The Space press that starts a round also flaps, because `flap` runs in both
+`PreGame` and `Playing`.
+
+## Plugins
+
+| Plugin (file) | Owns |
+|---|---|
+| `StatePlugin` (`state.rs`) | `GameState`, `GameOverSet` ordering, PreGame/GameOver text, start/restart input |
+| `BirdPlugin` (`bird.rs`) | Spawning the bird, flap, gravity, collision, detecting passed pipes |
+| `PipePlugin` (`pipe.rs`) | Gap layout math, spawning pipe pairs on a timer, despawning offscreen pipes |
+| `MovementPlugin` (`movement.rs`) | `Velocity` and `apply_velocity` (moves bird and pipes) |
+| `ScoringPlugin` (`scoring.rs`) | Current score, high score, save file, score text |
+
+## Entities
+
+```
+Bird ─────────── Bird · Velocity · Transform · Sprite · DespawnOnExit(Playing)
+Bottom pipe ──── Pipe · Velocity · Transform · Sprite · DespawnOnExit(Playing)
+Top pipe ─────── Pipe · TopPipe · Velocity · Transform · Sprite · DespawnOnExit(Playing)
+Score text ───── ScoreText · Text · TextFont · Node · DespawnOnExit(Playing)
+PreGame text ─── Text · TextFont · Node · DespawnOnExit(PreGame)
+GameOver text ── Text · TextFont · Node · DespawnOnExit(GameOver)
 Camera ───────── Camera2d
 ```
 
-After the bird passes a bottom pipe, that pipe also gets `Scored`.
-
-- Each obstacle = **two** pipe entities (top + bottom) with a gap between.
-- `Transform.translation` is the **center** of the sprite.
+- A bottom pipe gets `ScoredAlready` once the bird passes it.
+- `Transform.translation` is the **center** of a sprite.
+- World coordinates: `(0, 0)` is the screen center, y points up. UI (`Node`)
+  is measured from the window's top-left corner instead.
 
 ## Resources
 
-```
-Score ────────── current score
-PipeSpawnTimer ─ when to spawn the next pair
-```
+| Resource | Purpose |
+|---|---|
+| `GameScore` | Points this round. Reset on entering `PreGame`. |
+| `HighScore` | Best score ever. Loaded from `save.ron` at startup. |
+| `PipeSpawnTimer` | Repeating timer; a pipe pair spawns each time it finishes. |
 
-## Types
+## Messages
 
-- **Ours:** `Bird`, `Pipe`, `ScoreZone`, `Scored`, `ScoreText` (markers), `Velocity`, `Score`, `PipeSpawnTimer`, `GameState` (enum)
-- **Built into Bevy:** `Transform`, `Sprite`, `Text`, `Camera2d`
+| Message | Sent by | Read by |
+|---|---|---|
+| `PointScored` | `check_pipe_passed` (bird.rs) | `increase_score` (scoring.rs) |
 
-## Plugins and systems
+Anything that should award a point (a future coin, for example) sends
+`PointScored`. Only `increase_score` changes `GameScore`.
 
-```
-MovementPlugin
- └─ apply_velocity ........ Transform += Velocity × time  (bird AND pipes)
+## System ordering
 
-BirdPlugin
- ├─ spawn_bird ............ on entering Playing
- ├─ flap .................. key pressed → set Velocity upward
- ├─ apply_gravity ......... pull bird Velocity down every frame
- └─ check_collisions ...... bird overlaps pipe or ground → GameOver
+**`GameOverSet`** (defined and ordered in `state.rs`) splits entering `GameOver`
+into phases that run in this order:
 
-PipePlugin
- ├─ spawn_pipes ........... timer fires → spawn top + bottom with a gap
- └─ despawn_offscreen ..... pipe x past left edge → despawn
+1. `UpdateScores`: the final score is known. Update high score, save data, stats.
+2. `ShowUi`: build the game over screen, which can rely on the numbers being final.
 
-ScorePlugin
- ├─ check_score ........... ScoreZone without Scored, left of bird
- │                          → Score += 1, insert Scored
- └─ update_score_text ..... write Score into the ScoreText's Text
+To add a system to a phase, register it on `OnEnter(GameState::GameOver)` with
+`.in_set(GameOverSet::...)`. Don't list members here; search for
+`GameOverSet::` to see them.
 
-StatePlugin / UI
- ├─ menus / game over screens
- └─ reset Score on new game
-```
+Other systems run in no guaranteed order within a frame. That's fine so far
+(at worst one frame of delay), but use sets or `.before()`/`.after()` if a new
+system depends on another's result in the same frame.
 
-## One frame of Playing
+## Save data
+
+`save.ron` holds a `SaveData` struct, converted with serde + RON:
 
 ```
-input ──▶ flap ──▶ apply_gravity ──▶ apply_velocity ──▶ check_collisions
-                                                     ├──▶ check_score ──▶ update_score_text
-                                                     └──▶ despawn_offscreen
-spawn_pipes (whenever the timer fires)
+(
+    high_score: 42,
+)
 ```
 
-Bevy renders everything after our systems run.
+- Loaded once at startup. Missing or invalid file → starts at 0 (warning if invalid).
+- Written only when a round ends with a new high score.
+- The resource is updated **before** writing, so the screen is right even if saving fails.
+- Listed in `.gitignore`. Saved in the folder the game runs from.
 
 ## Design decisions
 
 - **Group plugins by thing, not action.** No "spawning" plugin; each plugin spawns its own entities.
-- **Velocity is shared.** One `apply_velocity` system moves bird and pipes.
-- **Bird x never changes.** Pipes move toward it. "Passed a pipe" = pipe x is left of bird x (adjusted for widths).
-- **Score once per obstacle.** *(As built)* Top pipes are excluded with `Without<TopPipe>`. After scoring, insert `ScoredAlready`; the query uses `Without<ScoredAlready>`.
-- **Scoring uses a message.** Anything that earns a point sends `PointScored`; only `increase_score` touches `GameScore`. Coins etc. just send the message.
-- **Despawn by reason, not by entity.** Off-screen pipes are despawned by a system; everything else is tagged `DespawnOnExit(state)` and cleaned up on state change.
+- **Shared velocity.** One `apply_velocity` system moves the bird and every pipe.
+- **Bird x never changes.** Pipes move toward it. "Passed" = bird center x ≥ pipe center x.
+- **One rectangle-overlap check (AABB).** Works for any pipe, top or bottom; no special cases.
+- **Score once per obstacle.** Only bottom pipes count (`Without<TopPipe>`), and
+  `ScoredAlready` + `Without<ScoredAlready>` stops a pipe from scoring twice.
+- **Scoring via a message**, so new ways to score don't touch score code.
+- **Despawn by reason, not by entity.** Offscreen pipes have a system; everything
+  else is tagged `DespawnOnExit(state)` and cleaned up automatically.
+- **Order plugins with sets, not function names**, so files depend on a shared
+  agreement (`GameOverSet`) instead of each other's internals.
+- **Restart on R, not Space**, so a panicked flap while dying can't skip the game over screen.
 
-## Build order
+## Roadmap
 
-- [x] 1. Window, camera, bird square
-- [x] 2. Gravity and velocity, so the bird falls
-- [x] 3. Flap on spacebar
-- [x] 4. Pipes spawning and scrolling
-- [x] 5. Despawn off-screen pipes
-- [x] 6. Collision → game over
-- [x] 7. Scoring and score text
-- [ ] 8. States: ~~restart~~ ✓, main menu, pause
-
-## Next: fix and polish
-
-**Gameplay fixes**
-- [x] Die when flying off the top/bottom of the screen
-- [x] ~~Short input delay on game over~~ Restart uses R instead of Space, so a dying flap can't restart
-- [x] PreGame "Press Space to start" state before each round
-- [x] Despawn pipes only when fully offscreen (`left_edge - PIPE_WIDTH / 2`)
+**Done**
+- [x] Bird, gravity, flap
+- [x] Random pipes, scrolling, offscreen despawn
+- [x] Collision with pipes and screen edges
+- [x] Scoring with on-screen text
+- [x] PreGame / Playing / GameOver states, restart
+- [x] High score saved to disk
 
 **Code cleanup**
 - [ ] Move `rects_overlap` out of `bird.rs` (TODO in code)
-- [ ] Remove leftover `println!`s and old comments
+- [x] Remove leftover `println!`s and old comments
 
-**Feel and looks**
+**Features and polish**
+- [ ] Pause
 - [ ] Camera scaling (fixed game size regardless of window size)
 - [ ] Properly centered UI text
 - [ ] Images instead of colored rectangles
 - [ ] Tilt the bird based on its velocity
 - [ ] Sound effects (flap, score, hit)
-- [ ] High score (resource that survives restarts; later, saved to a file)

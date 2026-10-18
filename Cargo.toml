@@ -6,6 +6,11 @@ edition = "2024"
 [dependencies]
 bevy = "0.20"
 rand = "0.10"
+# serde converts Rust structs to/from text formats. The "derive" feature
+# enables #[derive(Serialize, Deserialize)].
+serde = { version = "1.0", features = ["derive"] }
+# RON (Rusty Object Notation) is the text format we save to.
+ron = "0.12"
 
 # Bevy is very slow in debug builds. These settings optimize Bevy itself
 # (dependencies) while keeping your own code fast to recompile.

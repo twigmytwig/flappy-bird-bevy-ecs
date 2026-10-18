@@ -9,7 +9,6 @@ mod state;
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        // States first, so GameState exists before other plugins use it.
         .add_plugins(state::StatePlugin)
         .add_plugins(bird::BirdPlugin)
         .add_plugins(pipe::PipePlugin)

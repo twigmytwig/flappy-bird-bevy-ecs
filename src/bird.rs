@@ -7,9 +7,8 @@ use crate::state::GameState;
 
 pub struct BirdPlugin;
 
-// Upward speed (pixels per second) the bird gets from one flap.
+// Pixels per second, and pixels per second per second.
 const FLAP_STRENGTH: f32 = 350.0;
-// How fast gravity pulls velocity down (pixels per second, per second).
 const GRAVITY: f32 = 1000.0;
 
 #[derive(Component)]
@@ -18,10 +17,10 @@ pub struct Bird;
 impl Plugin for BirdPlugin{
     fn build(&self, app: &mut App){
         app.add_systems(OnEnter(GameState::PreGame), spawn_bird);
-        // A tuple registers several systems at once. Update = every frame.
         app.add_systems(Update, (apply_gravity, check_collision, check_pipe_passed).run_if(in_state(GameState::Playing)));
-        // Flap also runs in PreGame, so the Space press that starts the round
-        // gives the bird its first jump. or_else = "either condition is true".
+        // Flap also runs in PreGame so the Space press that starts the round
+        // gives the first jump. The state only changes at the end of the frame,
+        // so a Playing-only flap would miss that press.
         app.add_systems(Update, flap.run_if(in_state(GameState::PreGame).or_else(in_state(GameState::Playing))));
     }
 }
@@ -32,13 +31,13 @@ fn spawn_bird(mut commands: Commands){
         Velocity(Vec2::ZERO),
         Transform::from_xyz(-100.0, 0.0, 0.0),
         Sprite::from_color(Color::srgb(1.0, 0.8, 0.0), Vec2::new(30.0, 30.0)),
-        // Removed automatically when we leave Playing (game over).
+        // Spawned in PreGame but tagged Playing: survives PreGame -> Playing,
+        // removed on Playing -> GameOver.
         DespawnOnExit(GameState::Playing),
     ));
 }
 
-// Runs every frame, but only does something on the frame Space goes down.
-// It SETS the upward speed once; apply_velocity does the actual moving.
+// Sets the speed, doesn't move the bird. apply_velocity does the moving.
 fn flap(keys: Res<ButtonInput<KeyCode>>, mut query: Query<&mut Velocity, With<Bird>>){
     if keys.just_pressed(KeyCode::Space){
         for mut velocity in &mut query{
@@ -47,15 +46,12 @@ fn flap(keys: Res<ButtonInput<KeyCode>>, mut query: Query<&mut Velocity, With<Bi
     }
 }
 
-// Runs every frame: pulls the bird's velocity down a little each time.
-// Multiplying by delta time makes it the same per second at any frame rate.
 fn apply_gravity(time: Res<Time>, mut query: Query<&mut Velocity, With<Bird>>){
     for mut velocity in &mut query{
         velocity.0.y -= GRAVITY * time.delta_secs();
     }
 }
 
-//instead of scoringwhen you pass a pipe, im gonna grant it when the transforms.x are >= the pipes
 fn check_pipe_passed(
     mut commands: Commands,
     mut message: MessageWriter<PointScored>,
@@ -63,13 +59,11 @@ fn check_pipe_passed(
     pipes: Query<(Entity, &Transform), (With<Pipe>, Without<TopPipe>, Without<ScoredAlready>)>,
 ){
     let bird_transform = *bird;
-    // Destructure the tuple into names instead of using pipe.0 / pipe.1.
     for (pipe_entity, pipe_transform) in &pipes {
         if bird_transform.translation.x >= pipe_transform.translation.x {
-            // Tell the scoring system a point happened...
             message.write(PointScored);
-            // ...and mark this pipe so the Without<ScoredAlready> filter
-            // skips it from the next frame on.
+            // Commands apply after this system finishes, so the
+            // Without<ScoredAlready> filter skips this pipe from next frame on.
             commands.entity(pipe_entity).insert(ScoredAlready);
         }
     }
@@ -81,44 +75,38 @@ fn check_collision(
     mut next: ResMut<NextState<GameState>>,
     window: Single<&Window>
 ){
-    
-    // Single gives us the bird's (Transform, Sprite) tuple directly; `*`
-    // unwraps the Single so we can destructure it into two variables.
+    // `*` reaches through the Single wrapper so the tuple can be destructured.
     let (bird_transform, bird_sprite) = *bird;
 
-    // custom_size is an Option<Vec2>. `let ... else` says: if it's Some, pull
-    // the size out; otherwise run the else block (here: stop the system).
+    // let-else: take the value out of Some, or run the else block and leave.
     let Some(bird_size) = bird_sprite.custom_size else { return; };
 
-    // (0, 0) is the screen CENTER, so each edge is HALF the height away.
+    // World (0, 0) is the screen center, so each edge is half the height away.
     let screen_top = window.height() / 2.0;
     let screen_bottom = -window.height() / 2.0;
-    // Use the bird's edges, not its center, so it dies the moment it touches.
     let bird_top = bird_transform.translation.y + bird_size.y / 2.0;
     let bird_bottom = bird_transform.translation.y - bird_size.y / 2.0;
 
     if bird_bottom <= screen_bottom || bird_top >= screen_top {
         next.set(GameState::GameOver);
-        return; // already dead, no need to check pipes
+        return;
     }
-    // translation is a Vec3 (x, y, z); truncate() drops z, giving a Vec2 (x, y).
+
     let bird_center = bird_transform.translation.truncate();
 
     for (pipe_transform, pipe_sprite) in &pipes {
-        // Same idea, but `continue` skips just this pipe instead of stopping.
         let Some(pipe_size) = pipe_sprite.custom_size else { continue; };
         let pipe_center = pipe_transform.translation.truncate();
 
         if rects_overlap(bird_center, bird_size, pipe_center, pipe_size) {
-            //Change to game over satate.
             next.set(GameState::GameOver);
         }
     }
 }
 
-//TODO: move this out of bird, it is a general fucntio that could be reused eventually
-// AABB check: two rectangles touch only if they overlap on x AND on y.
-// Each one is described by its center and its full size (width, height).
+//TODO: move this out of bird, it is a general function that could be reused eventually
+// AABB: two unrotated rectangles touch only if they overlap on x AND on y.
+// Positions are centers; sizes are full width/height.
 fn rects_overlap(a_center: Vec2, a_size: Vec2, b_center: Vec2, b_size: Vec2) -> bool {
     let a_left = a_center.x - a_size.x / 2.0;
     let a_right = a_center.x + a_size.x / 2.0;
