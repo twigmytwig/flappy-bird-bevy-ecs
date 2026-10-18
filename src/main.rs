@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 mod animation;
+mod background;
 mod bird;
 mod pipe;
 mod movement;
@@ -16,6 +17,7 @@ fn main() {
         .add_plugins(pipe::PipePlugin)
         .add_plugins(movement::MovementPlugin)
         .add_plugins(animation::AnimationPlugin)
+        .add_plugins(background::BackgroundPlugin)
         .add_plugins(scoring::ScoringPlugin)
         .add_systems(Startup, spawn_camera)
         .run();
