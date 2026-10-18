@@ -147,3 +147,18 @@ system depends on another's result in the same frame.
 - [ ] Images instead of colored rectangles
 - [ ] Tilt the bird based on its velocity
 - [ ] Sound effects (flap, score, hit)
+
+## Future ideas
+
+**Not started until the core game is solid, polished and fun.** These are
+direction, not commitments.
+
+- **Coins.** Collectible in the level. Picking one up adds to the score (send
+  `PointScored`) *and* to a persistent coin balance (a new `SaveData` field).
+- **Spending coins.** A shop between runs for perks, power-ups or cosmetics.
+  Probably its own `GameState`.
+- **Moving obstacles.** Pipes or hazards that move vertically, or new obstacle
+  types. A `Velocity` with a y component may be most of it.
+- **Boss fights.** A scripted encounter after some number of pipes.
+- **Roguelike structure.** Runs made of stages, choosing upgrades between them,
+  coins and unlocks carrying over between runs.
