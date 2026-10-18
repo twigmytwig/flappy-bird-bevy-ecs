@@ -1,0 +1,16 @@
+[package]
+name = "flappy_bird"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = "0.20"
+rand = "0.10"
+
+# Bevy is very slow in debug builds. These settings optimize Bevy itself
+# (dependencies) while keeping your own code fast to recompile.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
